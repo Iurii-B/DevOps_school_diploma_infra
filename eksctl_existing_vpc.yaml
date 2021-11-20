@@ -1,0 +1,28 @@
+---
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: cluster1
+  region: eu-central-1
+
+vpc:
+  id: "XXX"  # (optional, must match VPC ID used for each subnet below)
+  cidr: "XXX/X"       # (optional, must match CIDR used by the given VPC)
+  subnets:
+    # must provide 'private' and/or 'public' subnets by availibility zone as shown
+    private:
+      eu-central-1a:
+        id: "subnet-XXX"
+        cidr: "XXX/X" # (optional, must match CIDR used by the given subnet)
+
+      eu-central-1b:
+        id: "subnet-XXX"
+        cidr: "XXX/X"  # (optional, must match CIDR used by the given subnet)
+
+managedNodeGroups:
+  - name: ng1
+    instanceType: t3a.small
+    volumeSize: 20
+    desiredCapacity: 2
+    privateNetworking: true # if only 'Private' subnets are given, this must be enabled
