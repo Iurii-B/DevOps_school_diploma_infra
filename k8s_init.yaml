@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask1-deploy
+  namespace: prod
+  labels:
+    app: flaskapp1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: flaskapp1
+  template:
+    metadata:
+      name: flasktemplate1
+      labels:
+        app: flaskapp1
+    spec:
+      containers:
+      - image: XXX/YYY:init
+        name: flaskcontainer
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: flask-lbsvc
+  namespace: prod
+spec:
+  type: LoadBalancer
+  selector:
+    app: flaskapp1
+  ports:
+  - protocol: TCP
+    port: XXX
+    targetPort: XXX
