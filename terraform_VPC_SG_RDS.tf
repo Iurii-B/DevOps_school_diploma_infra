@@ -162,6 +162,7 @@ resource "aws_db_instance" "database1" {
     parameter_group_name = "default.mariadb10.4"
     db_subnet_group_name = aws_db_subnet_group.database1-subnet-group.name
     vpc_security_group_ids = [aws_security_group.terraform_sg.id]
+    publicly_accessible = true
     skip_final_snapshot = true
     allocated_storage = 20
     auto_minor_version_upgrade = false
