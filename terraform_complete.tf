@@ -70,6 +70,22 @@ module "eks" {
   }
 }
 
+data "aws_eks_cluster" "cluster" {
+  name = module.eks.cluster_id
+}
+
+data "aws_eks_cluster_auth" "cluster" {
+  name = module.eks.cluster_id
+}
+
+
+provider "kubernetes" {
+  host                   = data.aws_eks_cluster.cluster.endpoint
+  token                  = data.aws_eks_cluster_auth.cluster.token
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority.0.data)
+}
+# To configure kubectl run "aws eks --region $(terraform output -raw region) update-kubeconfig --name $(terraform output -raw cluster_name)"
+
 resource "aws_security_group" "tf_sg1" {
   name_prefix = "tf_sg1"
   vpc_id      = module.vpc.vpc_id
@@ -90,7 +106,7 @@ resource "aws_security_group" "tf_sg1" {
     protocol  = "tcp"
 
     cidr_blocks = [
-      "5.18.240.0/21",
+      "XXX",
     ]
   }
 
@@ -114,6 +130,7 @@ resource "time_sleep" "wait_60s" {
 }
 
 
+
 data "aws_subnet_ids" "subnet_ids" {
     vpc_id = module.vpc.vpc_id
     depends_on = [time_sleep.wait_60s]
@@ -131,7 +148,7 @@ resource "aws_db_instance" "database1" {
     instance_class = "db.t2.medium"
     name = "database1"
     identifier = "database1"
-    username = "db_admin"
+    username = "XXX"
     password = "XXX"
     parameter_group_name = "default.mariadb10.4"
     db_subnet_group_name = aws_db_subnet_group.database1-subnet-group.name
@@ -141,22 +158,6 @@ resource "aws_db_instance" "database1" {
     allocated_storage = 20
     auto_minor_version_upgrade = false
 }
-
-
-data "aws_eks_cluster" "cluster" {
-  name = module.eks.cluster_id
-}
-
-data "aws_eks_cluster_auth" "cluster" {
-  name = module.eks.cluster_id
-}
-
-provider "kubernetes" {
-  host                   = data.aws_eks_cluster.cluster.endpoint
-  token                  = data.aws_eks_cluster_auth.cluster.token
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority.0.data)
-}
-# To configure kubectl run "aws eks --region $(terraform output -raw region) update-kubeconfig --name $(terraform output -raw cluster_name)"
 
 
 provider "kubectl" {
@@ -202,33 +203,121 @@ spec:
         - name: DB_ADMIN_USERNAME
           value: "XXX"
         - name: DB_ADMIN_PASSWORD
-          value: "XXX"
+          value: ${aws_db_instance.database1.password}
         - name: DB_URL
           value: ${aws_db_instance.database1.address}/database1
 
+
 YAML
 }
 
-resource "kubectl_manifest" "flask1-svc" {
-    yaml_body = <<YAML
-kind: Service
-apiVersion: v1
-metadata:
-  name: flask1-lb
-  namespace: prod
-spec:
-  type: LoadBalancer
-  selector:
-    app: flaskapp1
-  ports:
-  - protocol: TCP
-    port: 5000
-    targetPort: 5000
-YAML
+resource "kubernetes_service" "elb" {
+  metadata {
+    name = "terraform-elb"
+    namespace = "prod"
+  }
+  spec {
+    selector = {
+      app = "flaskapp1"
+    }
+    port {
+      port        = 5000
+      target_port = 5000
+    }
+
+    type = "LoadBalancer"
+  }
 }
 
 
-output "this_db_instance_address" {
+resource aws_cloudwatch_dashboard my-dashboard {
+  dashboard_name = "tf-dashboard-1" 
+  dashboard_body = <<JSON
+{
+    "widgets": [
+        {
+            "height": 6,
+            "width": 6,
+            "y": 0,
+            "x": 0,
+            "type": "metric",
+            "properties": {
+                "metrics": [
+                    [ "AWS/RDS", "FreeStorageSpace" ]
+                ],
+                "view": "timeSeries",
+                "stacked": false,
+                "region": "${var.region}",
+                "period": 300,
+                "stat": "Average",
+                "title": "RDS FreeStorageSpace"
+            }
+        },
+        {
+            "height": 6,
+            "width": 6,
+            "y": 0,
+            "x": 6,
+            "type": "metric",
+            "properties": {
+                "view": "timeSeries",
+                "stacked": false,
+                "metrics": [
+                    [ "AWS/EC2", "CPUUtilization", "AutoScalingGroupName", "${module.eks.node_groups.tf_ng1.resources[0].autoscaling_groups[0].name}", { "region": "${var.region}" } ]
+                ],
+                "region": "${var.region}",
+                "title": "NodeGroup CPUUtilization"
+            }
+        },
+        {
+            "type": "metric",
+            "x": 12,
+            "y": 0,
+            "width": 6,
+            "height": 6,
+            "properties": {
+                "view": "timeSeries",
+                "stacked": false,
+                "metrics": [
+                    [ "AWS/Route53", "HealthCheckPercentageHealthy", "HealthCheckId", "${aws_route53_health_check.elb_check1.id}", { "region": "us-east-1" } ]
+                ],
+                "region": "${var.region}",
+                "title": "ELB HealthCheck percentage",
+                "period": 60,
+                "stat": "Average"
+            }
+        }
+    ]
+}
+JSON
+}
+
+resource "aws_route53_health_check" "elb_check1" {
+  fqdn              = resource.kubernetes_service.elb.status[0].load_balancer[0].ingress[0].hostname
+  port              = 5000
+  type              = "HTTP"
+  resource_path     = "/"
+  failure_threshold = "5"
+  request_interval  = "30"
+
+  tags = {
+    Name = "tf-elb-health-check-1"
+  }
+}
+
+output "route53_health_check_id" {
+  value = aws_route53_health_check.elb_check1.id
+}
+
+output "asg_group" {
+  value = module.eks.node_groups.tf_ng1.resources[0].autoscaling_groups[0].name
+}
+
+output "elb" {
+  value = resource.kubernetes_service.elb.status[0].load_balancer[0].ingress[0].hostname
+}
+
+output "db_instance_address" {
     value = aws_db_instance.database1.address
 }
 
@@ -237,24 +326,9 @@ output "cluster_id" {
   value       = module.eks.cluster_id
 }
 
-output "cluster_endpoint" {
-  description = "Endpoint for EKS control plane."
-  value       = module.eks.cluster_endpoint
-}
-
-output "cluster_security_group_id" {
-  description = "Security group ids attached to the cluster control plane."
-  value       = module.eks.cluster_security_group_id
-}
-
 output "kubectl_config" {
   description = "kubectl config as generated by the module."
   value       = module.eks.kubeconfig
-}
-
-output "config_map_aws_auth" {
-  description = "A kubernetes configuration to authenticate to this EKS cluster."
-  value       = module.eks.config_map_aws_auth
 }
 
 output "region" {
