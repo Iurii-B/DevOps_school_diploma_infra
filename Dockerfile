@@ -8,13 +8,16 @@ COPY ./app/static /app/static/
 COPY ./app/templates /app/templates/
 COPY ./requirements.txt /app/
 RUN pip install -r /app/requirements.txt
-ARG VAR1
-ARG VAR2
-ARG VAR3
-ENV DB_ADMIN_USERNAME=$VAR1
-ENV DB_ADMIN_PASSWORD=$VAR2
-ENV DB_URL=$VAR3
 WORKDIR /app/
 CMD ["uwsgi", "--ini", "uwsgi.ini"]
 
-# docker build -t TAG --build-arg VAR1=$DB_ADMIN_USERNAME --build-arg VAR2=$DB_ADMIN_PASSWORD --build-arg VAR3=$DB_URL .
+# Environmental variables are inserted to the container via k8s and are not provided neither in Dockerfile nor in GitHub Actions
+# Otherwise they have to be specified in Dockerfile and inserted during image build:
+# ARG VAR1
+# ENV DB_ADMIN_USERNAME=$VAR1
+#
+# docker build -t TAG --build-arg VAR1=$DB_ADMIN_USERNAME --build-arg VAR2=$DB_ADMIN_PASSWORD --build-arg VAR3=$DB_URL
+#
+# or (for GitHub Actions)
+# build-args: |
+#   VAR1=${{ secrets.DB_ADMIN_USERNAME }}
