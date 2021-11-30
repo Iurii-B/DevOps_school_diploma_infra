@@ -48,44 +48,6 @@ module "vpc" {
   database_subnet_tags = {Name = "database-subnets-tag"}
 }
 
-module "eks" {
-  source  = "terraform-aws-modules/eks/aws"
-  version = "17.24.0"
-
-  cluster_name    = "${local.cluster_name}"
-  cluster_version = "1.21"
-  #subnets         = module.vpc.private_subnets     # Not needed if we deploy nodes to Public subnets (test environment)
-  subnets         = module.vpc.public_subnets       # Nodes are deployed to Public subnets. Not good for Prod, but acceptable for Test (default EKS SGs allow only intra-cluster communication)
-  
-  vpc_id = module.vpc.vpc_id
-
-  node_groups = {
-    tf_ng1 = {
-      desired_capacity = 2
-      max_capacity         = 2
-      min_capacity         = 2
-      instance_types   = ["t3a.small"]
-      disk_size        = "8"
-    }
-  }
-}
-
-data "aws_eks_cluster" "cluster" {
-  name = module.eks.cluster_id
-}
-
-data "aws_eks_cluster_auth" "cluster" {
-  name = module.eks.cluster_id
-}
-
-
-provider "kubernetes" {
-  host                   = data.aws_eks_cluster.cluster.endpoint
-  token                  = data.aws_eks_cluster_auth.cluster.token
-  cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority.0.data)
-}
-# To configure kubectl run "aws eks --region $(terraform output -raw region) update-kubeconfig --name $(terraform output -raw cluster_name)"
-
 resource "aws_security_group" "tf_sg1" {
   name_prefix = "tf_sg1"
   vpc_id      = module.vpc.vpc_id
@@ -124,17 +86,57 @@ resource "aws_security_group" "tf_sg1" {
 }
 
 
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "17.24.0"
+  cluster_enabled_log_types = ["api"]
+
+  cluster_name    = "${local.cluster_name}"
+  cluster_version = "1.21"
+  #subnets         = module.vpc.private_subnets     # Not needed if we deploy nodes to Public subnets (test environment)
+  subnets         = module.vpc.public_subnets       # Nodes are deployed to Public subnets. Not good for Prod, but acceptable for Test (default EKS SGs allow only intra-cluster communication)
+  
+  vpc_id = module.vpc.vpc_id
+
+  node_groups = {
+    tf_ng1 = {
+      desired_capacity = 2
+      max_capacity         = 2
+      min_capacity         = 2
+      instance_types   = ["t3a.small"]
+      disk_size        = "8"
+    }
+  }
+}
+
+data "aws_eks_cluster" "cluster" {
+  name = module.eks.cluster_id
+}
+
+data "aws_eks_cluster_auth" "cluster" {
+  name = module.eks.cluster_id
+}
+
+
+provider "kubernetes" {
+  host                   = data.aws_eks_cluster.cluster.endpoint
+  token                  = data.aws_eks_cluster_auth.cluster.token
+  cluster_ca_certificate = base64decode(data.aws_eks_cluster.cluster.certificate_authority.0.data)
+}
+# To configure kubectl run "aws eks --region $(terraform output -raw region) update-kubeconfig --name $(terraform output -raw cluster_name)"
+
+
 resource "time_sleep" "wait_60s" {
   create_duration = "60s"
   depends_on = [module.vpc.database_subnets]
 }
 
-
-
 data "aws_subnet_ids" "subnet_ids" {
     vpc_id = module.vpc.vpc_id
-    depends_on = [time_sleep.wait_60s]
-    tags = {Name = "database-subnets-tag"}
+    depends_on = [time_sleep.wait_60s]  # Wait to ensure that subnets are ready
+    tags = {
+      Name = "database-subnets-tag"
+    }
 }
 
 resource "aws_db_subnet_group" "database1-subnet-group" {
@@ -168,6 +170,7 @@ provider "kubectl" {
 }
 
 resource "kubectl_manifest" "flask1-ns" {
+    depends_on = [module.eks.node_groups]   # Implicit dependency did not work properly
     yaml_body = <<YAML
 apiVersion: v1
 kind: Namespace
@@ -177,6 +180,7 @@ YAML
 }
 
 resource "kubectl_manifest" "flask1-deploy" {
+    depends_on = [module.eks.node_groups]   # Implicit dependency did not work properly
     yaml_body = <<YAML
 apiVersion: apps/v1
 kind: Deployment
@@ -197,7 +201,7 @@ spec:
         app: flaskapp1
     spec:
       containers:
-      - image: XXX:init
+      - image: 196303011648.dkr.ecr.eu-central-1.amazonaws.com/container_repo1:init
         name: flaskcontainer
         env:
         - name: DB_ADMIN_USERNAME
@@ -206,12 +210,16 @@ spec:
           value: ${aws_db_instance.database1.password}
         - name: DB_URL
           value: ${aws_db_instance.database1.address}/database1
-
-
 YAML
 }
 
+resource "time_sleep" "wait_30s" {
+  create_duration = "30s"
+  depends_on = [kubectl_manifest.flask1-deploy]
+}
+
 resource "kubernetes_service" "elb" {
+  depends_on = [time_sleep.wait_30s]  # Wait to ensure that "prod" namespace is ready and pods are deployed
   metadata {
     name = "terraform-elb"
     namespace = "prod"
@@ -305,20 +313,38 @@ resource "aws_route53_health_check" "elb_check1" {
   }
 }
 
-output "route53_health_check_id" {
-  value = aws_route53_health_check.elb_check1.id
-}
 
-output "asg_group" {
-  value = module.eks.node_groups.tf_ng1.resources[0].autoscaling_groups[0].name
+output "region" {
+  description = "AWS region"
+  value       = var.region
 }
 
 output "elb" {
+  description = "ELB FQDN"
   value = resource.kubernetes_service.elb.status[0].load_balancer[0].ingress[0].hostname
 }
 
 output "db_instance_address" {
-    value = aws_db_instance.database1.address
+  description = "RDS FQDN"
+  value = aws_db_instance.database1.address
+}
+
+output "cluster_name" {
+  description = "Kubernetes Cluster Name"
+  value       = local.cluster_name
+}
+
+
+# Some test output
+/*
+output "route53_health_check_id" {
+  description = "Route 53 ELB public FQDN Health Check ID. Used by CloudWatch"
+  value = aws_route53_health_check.elb_check1.id
+}
+
+output "asg_group" {
+  description = "Auto-Scaling Group (EKS Node Group) ID. Used by CloudWatch."
+  value = module.eks.node_groups.tf_ng1.resources[0].autoscaling_groups[0].name
 }
 
 output "cluster_id" {
@@ -330,13 +356,4 @@ output "kubectl_config" {
   description = "kubectl config as generated by the module."
   value       = module.eks.kubeconfig
 }
-
-output "region" {
-  description = "AWS region"
-  value       = var.region
-}
-
-output "cluster_name" {
-  description = "Kubernetes Cluster Name"
-  value       = local.cluster_name
-}
+*/
