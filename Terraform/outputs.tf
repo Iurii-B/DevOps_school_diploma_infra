@@ -8,6 +8,11 @@ output "elb" {
   value = resource.kubernetes_service.elb.status[0].load_balancer[0].ingress[0].hostname
 }
 
+output "elb_id" {
+  description = "ELB ID"
+  value = substr(resource.kubernetes_service.elb.status[0].load_balancer[0].ingress[0].hostname, 0, 32)
+}
+
 output "db_instance_address" {
   description = "RDS FQDN"
   value = aws_db_instance.database1.address
