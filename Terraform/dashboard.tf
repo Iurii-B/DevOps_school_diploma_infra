@@ -1,11 +1,11 @@
-resource "time_sleep" "wait_180s" {
-  create_duration = "180s"
-  depends_on = [module.eks.node_groups]
+resource "time_sleep" "wait_600s" {
+  create_duration = "600s"
+  depends_on = [kubernetes_deployment.deploy]
 }
 
 resource aws_cloudwatch_dashboard my-dashboard {
   dashboard_name = "tf-dashboard-1"
-  depends_on = [time_sleep.wait_180s]
+  depends_on = [time_sleep.wait_600s]
   dashboard_body = <<JSON
 {
     "widgets": [
