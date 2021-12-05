@@ -50,11 +50,11 @@ resource "kubernetes_deployment" "deploy" {
         
           resources {
             limits = {
-              cpu    = "250m"
+              cpu    = "500m"
               memory = "100Mi"
             }
             requests = {
-              cpu    = "50m"
+              cpu    = "150m"
               memory = "50Mi"
             }
           }
@@ -84,6 +84,12 @@ resource "kubernetes_service" "elb" {
   metadata {
     name = "tf-elb"
     namespace = var.k8s_namespace
+    annotations = {
+      "service.beta.kubernetes.io/aws-load-balancer-access-log-enabled" = "true"
+      "service.beta.kubernetes.io/aws-load-balancer-access-log-emit-interval" = "5"
+      "service.beta.kubernetes.io/aws-load-balancer-access-log-s3-bucket-name" = "tf-s3-bucket-for-logs"
+    }
+
   }
 
   spec {
